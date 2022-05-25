@@ -119,13 +119,17 @@ def main(data):
 	ndarr = np.ndarray(len(data), dtype=np.uint8, buffer=data)
 	N, K = 255, 223
 	rs = galois.ReedSolomon(N, K)
-	bits = to_bits(rs.encode(ndarr[:K]))
+	chunk = [to_bits(rs.encode(ndarr[ib : ib+K])) for ib in range(0, len(data), K)]
 	channels = [BSC(), BEC(), GilbertModel(0.005, 0.2)]
-	print(f"Sending {K} bytes")
+	print(f"Packet size: {K}")
 	for channel in channels:
-		channelised = to_bytes(channel.channelise(bits))
-		decoded, N = rs.decode(channelised, errors=True)
-		print(f"{np.array_equal(ndarr[:K], decoded)=:} {N=} {channel}")
+		results = []
+		for i, packet in enumerate(chunk):
+			channelised = to_bytes(channel.channelise(packet))
+			decoded, N = rs.decode(channelised, errors=True)
+			results.append(N)
+		print(channel, f"invalid chunk: {results.count(-1)}")
+		print(results)
 	return
 
 if __name__ == "__main__":
