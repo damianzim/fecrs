@@ -15,7 +15,7 @@ import numpy as np
 # Binary transmission channel models: BSC, GilbertModel, BEC
 
 P = 0.05 # 0.0005
-Q = 0.80
+Q = 0.90
 
 def to_bits(buf: memoryview, bits=None):
 	if bits is None:
@@ -66,6 +66,38 @@ class BSC(Channel):
 		out_gen = (bits[i] if choice else 1 - bits[i] for i, choice in enumerate(choices))
 		return array.array("B", out_gen)
 
+class GilbertModel(Channel):
+	class State(IntEnum):
+		CORRECT = 0
+		INCORRECT = 1
+
+	def __init__(self, ci, ic, pc=P, pi=Q):
+		Channel.__init__(self)
+		self.ci, self.ci_prime = ci, 1 - ci # ci: correct -> incorrect, ci_prime: correct -> correct
+		self.ic, self.ic_prime = ic, 1 - ic # ic: incorrect -> correct, ic_prime: incorrect -> incorrect
+		self.pc, self.pc_prime = pc, 1 - pc # pc: P(error) in correct state
+		self.pi, self.pi_prime = pi, 1 - pi # pi: P(error) in incorrect state, pi >> pc
+		self.perr = ((self.pc, self.pc_prime), (self.pi, self.pi_prime))
+		self.state = self.State.CORRECT
+
+	def __str__(self):
+		return f"GilbertModel(ci={self.ci}, ci_prime={self.ci_prime}, ic={self.ic}, ic_prime={self.ic_prime}, pc={self.pc}, pc_prime={self.pc_prime}, pi={self.pi}, pi_prime={self.pi_prime})"
+
+	def step_state(self):
+		if self.state == self.State.CORRECT:
+			print("CORRECT")
+			self.state = np.random.choice([self.State.INCORRECT, self.State.CORRECT], p=[self.ci, self.ci_prime])
+		else:
+			print("INCORRECT")
+			self.state = np.random.choice([self.State.CORRECT, self.State.INCORRECT], p=[self.ic, self.ic_prime])
+		return self.state
+
+	def channelise(self, bits):
+		def choices():
+			for i in range(len(bits)):
+				yield np.random.choice([random.getrandbits(1), bits[i]], p=self.perr[self.step_state()])
+		return array.array("B", choices())
+
 class BEC(Channel):
 	# BEC - Bianry Erasure Channel
 	#	- Receive sent bit with probability 1-p
@@ -87,7 +119,7 @@ def main(data):
 	if data is None:
 		data =  b"\x12\x23\xf9\x28"
 	bits = to_bits(data)
-	channels = [BSC(), BEC()]
+	channels = [BSC(), BEC(), GilbertModel(0.05, 0.2)]
 	print(data.hex(" "))
 	for channel in channels:
 		result = to_bytes(channel.channelise(bits))
