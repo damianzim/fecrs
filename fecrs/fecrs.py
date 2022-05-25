@@ -9,13 +9,13 @@ import os
 import random
 import sys
 
-# import galois
+import galois
 import numpy as np
 
 # Binary transmission channel models: BSC, GilbertModel, BEC
 
-P = 0.05 # 0.0005
-Q = 0.90
+P = 0.005
+Q = 0.3
 
 def to_bits(buf: memoryview, bits=None):
 	if bits is None:
@@ -43,7 +43,7 @@ def to_bytes(bits):
 				res <<= 1
 				res |= slice[i]
 			yield res
-	return bytes(pack_bits())
+	return np.fromiter(pack_bits(), dtype=np.uint8)
 
 class Channel(ABC):
 	@abstractmethod
@@ -85,10 +85,8 @@ class GilbertModel(Channel):
 
 	def step_state(self):
 		if self.state == self.State.CORRECT:
-			print("CORRECT")
 			self.state = np.random.choice([self.State.INCORRECT, self.State.CORRECT], p=[self.ci, self.ci_prime])
 		else:
-			print("INCORRECT")
 			self.state = np.random.choice([self.State.CORRECT, self.State.INCORRECT], p=[self.ic, self.ic_prime])
 		return self.state
 
@@ -118,13 +116,16 @@ class BEC(Channel):
 def main(data):
 	if data is None:
 		data =  b"\x12\x23\xf9\x28"
-	bits = to_bits(data)
-	channels = [BSC(), BEC(), GilbertModel(0.05, 0.2)]
-	print(data.hex(" "))
+	ndarr = np.ndarray(len(data), dtype=np.uint8, buffer=data)
+	N, K = 255, 223
+	rs = galois.ReedSolomon(N, K)
+	bits = to_bits(rs.encode(ndarr[:K]))
+	channels = [BSC(), BEC(), GilbertModel(0.005, 0.2)]
+	print(f"Sending {K} bytes")
 	for channel in channels:
-		result = to_bytes(channel.channelise(bits))
-		print(channel, f"{np.array_equal(data, result)=:}")
-		print(result.hex(" "))
+		channelised = to_bytes(channel.channelise(bits))
+		decoded, N = rs.decode(channelised, errors=True)
+		print(f"{np.array_equal(ndarr[:K], decoded)=:} {N=} {channel}")
 	return
 
 if __name__ == "__main__":
