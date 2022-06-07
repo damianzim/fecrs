@@ -7,6 +7,7 @@ from enum import IntEnum
 import itertools
 import os
 import random
+import statistics as st
 import sys
 
 import galois
@@ -59,7 +60,7 @@ class BSC(Channel):
 		self.p, self.p_prime = p, 1 - p
 
 	def __str__(self):
-		return f"BSC(p={self.p}, p_prime={self.p_prime})"
+		return f"BSC(p={self.p}, p'={self.p_prime})"
 
 	def channelise(self, bits):
 		choices = np.random.choice([0, 1], size=len(bits), p=[self.p, self.p_prime])
@@ -81,7 +82,8 @@ class GilbertModel(Channel):
 		self.state = self.State.CORRECT
 
 	def __str__(self):
-		return f"GilbertModel(ci={self.ci}, ci_prime={self.ci_prime}, ic={self.ic}, ic_prime={self.ic_prime}, pc={self.pc}, pc_prime={self.pc_prime}, pi={self.pi}, pi_prime={self.pi_prime})"
+		return f"GilbertModel(ci={self.ci}, ci'e={self.ci_prime}, ic={self.ic}, ic'={self.ic_prime}, " \
+			f"pc={self.pc}, pc'={self.pc_prime}, pi={self.pi}, pi'={self.pi_prime})"
 
 	def step_state(self):
 		if self.state == self.State.CORRECT:
@@ -106,30 +108,69 @@ class BEC(Channel):
 		self.p, self.p_prime = p, 1 - p
 
 	def __str__(self):
-		return f"BEC(p={self.p}, p_prime={self.p_prime})"
+		return f"BEC(p={self.p}, p'={self.p_prime})"
 
 	def channelise(self, bits):
 		choices = np.random.choice([0, 1], size=len(bits), p=[self.p, self.p_prime])
 		out_gen = (bits[i] if choice else random.getrandbits(1) for i, choice in enumerate(choices))
 		return array.array("B", out_gen)
 
+def encoded_chunks(rs, data, chunk_size):
+	return [
+		to_bits(rs.encode(data[ib : ib+chunk_size]))
+		for ib in range(0, len(data), chunk_size)]
+
+def channels_stats(channels, chunks, rs, data_size, p):
+	n, k = rs.n, rs.k
+	r = n - k
+	code_channel = f"RS({n}, {k}) p={p})"
+	print(f"=== BEGIN: {code_channel} data size: {data_size} bytes, chunk size: {k}, number of chunks: {len(chunks)} ===")
+	for i, channel in enumerate(channels):
+		if i > 0:
+			print()
+		invalid = 0
+		invalid_bytes = 0
+		corrected = []
+		for chunk in chunks:
+			channelised = to_bytes(channel.channelise(chunk))
+			decoded, errors = rs.decode(channelised, errors=True)
+			if errors == -1:
+				invalid += 1
+				invalid_bytes += len(channelised) - r
+			else:
+				corrected.append(errors)
+		print(channel)
+		if len(corrected) == 0:
+			corrected.append(0)
+		print(f"corrected errors/chunk avg: {st.mean(corrected):.2f} std: {st.pstdev(corrected):.2f}")
+		print(f"received: invalid chunks: {invalid}/{len(chunks)}, invalid bytes: {invalid_bytes}/{data_size}")
+	print(f"=== END: {code_channel} ===\n")
+
+def stats_change_control_positions(data):
+	N, K = 255, (203, 213, 223, 233)
+	channels = [BSC(), BEC(), GilbertModel(0.005, 0.2)]
+	for k in K:
+		rs = galois.ReedSolomon(N, k)
+		chunks = encoded_chunks(rs, data, k)
+		channels_stats(channels, chunks, rs, len(data), P)
+
+def stats_change_channel_config(data):
+	N, K = 255, 223
+	P = (0.001, 0.003, 0.005, 0.01)
+	rs = galois.ReedSolomon(N, K)
+	chunks = encoded_chunks(rs, data, K)
+	for p in P:
+		channels = [BSC(p=p), BEC(p=p), GilbertModel(0.005, 0.2, pc=p)]
+		channels_stats(channels, chunks, rs, len(data), p)
+
 def main(data):
 	if data is None:
 		data =  b"\x12\x23\xf9\x28"
 	ndarr = np.ndarray(len(data), dtype=np.uint8, buffer=data)
-	N, K = 255, 223
-	rs = galois.ReedSolomon(N, K)
-	chunk = [to_bits(rs.encode(ndarr[ib : ib+K])) for ib in range(0, len(data), K)]
-	channels = [BSC(), BEC(), GilbertModel(0.005, 0.2)]
-	print(f"Packet size: {K}")
-	for channel in channels:
-		results = []
-		for i, packet in enumerate(chunk):
-			channelised = to_bytes(channel.channelise(packet))
-			decoded, N = rs.decode(channelised, errors=True)
-			results.append(N)
-		print(channel, f"invalid chunk: {results.count(-1)}")
-		print(results)
+	print("\n\n========== Change number of control position ==========\n")
+	stats_change_control_positions(ndarr)
+	print("\n\n========== Change channel configuration ==========\n")
+	stats_change_channel_config(ndarr)
 	return
 
 if __name__ == "__main__":
